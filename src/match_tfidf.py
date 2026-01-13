@@ -91,6 +91,8 @@ def explain_matches(df: pd.DataFrame, resume_text: str, k: int = TOP_K) -> pd.Da
     resume_terms = set(top_terms(vectorizer, resume_vec, n=RESUME_TERMS_N))
 
     matched_keywords = []
+    missing_keywords = []
+
     # Map dataframe index -> row position inside job_text/job_matrix
     index_to_pos = {idx: pos for pos, idx in enumerate(job_text.index)}
 
@@ -98,15 +100,20 @@ def explain_matches(df: pd.DataFrame, resume_text: str, k: int = TOP_K) -> pd.Da
         pos = index_to_pos.get(idx)
         if pos is None:
             matched_keywords.append("")
+            missing_keywords.append("")
             continue
 
         job_vec = job_matrix[pos]
         job_terms = set(top_terms(vectorizer, job_vec, n=JOB_TERMS_N))
 
         overlap = sorted(resume_terms.intersection(job_terms))[:OVERLAP_N]
+        missing = sorted(job_terms - resume_terms)[:OVERLAP_N]
+
         matched_keywords.append(", ".join(overlap))
+        missing_keywords.append(", ".join(missing))
 
     top_df["matched_keywords"] = matched_keywords
+    top_df["missing_keywords"] = missing_keywords
     return top_df
 
 
@@ -122,7 +129,7 @@ def main() -> None:
     ensure_output_dir(OUTPUT_DIR)
     matches.to_csv(OUTPUT_CSV, index=False)
 
-    cols_to_show = ["Title", "Company", "Location", "match_score", "matched_keywords"]
+    cols_to_show = ["Title", "Company", "Location", "match_score", "matched_keywords", "missing_keywords"]
     existing_cols = [c for c in cols_to_show if c in matches.columns]
     print(matches[existing_cols].to_string(index=False))
 
