@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -16,6 +17,11 @@ DROP_COLUMNS = ["Unnamed: 0"]
 
 TOP_K = 10
 MAX_FEATURES = 50_000
+
+# Explanation knobs
+RESUME_TERMS_N = 30   # how many top resume terms to consider
+JOB_TERMS_N = 30      # how many top job terms to consider
+OVERLAP_N = 12        # how many overlapping terms to display
 
 
 # -----------------------
@@ -50,22 +56,58 @@ def build_vectorizer(max_features: int = MAX_FEATURES) -> TfidfVectorizer:
     return TfidfVectorizer(stop_words="english", max_features=max_features)
 
 
-def compute_similarity_scores(job_text: pd.Series, resume_text: str) -> pd.Series:
+def top_terms(vectorizer: TfidfVectorizer, vec, n: int = 15) -> list[str]:
+    """
+    Return top-n terms (by TF-IDF weight) from a single sparse vector.
+    """
+    feature_names = vectorizer.get_feature_names_out()
+    weights = vec.toarray().ravel()
+    if weights.size == 0:
+        return []
+    top_idx = np.argsort(weights)[::-1][:n]
+    return [feature_names[i] for i in top_idx if weights[i] > 0]
+
+
+def explain_matches(df: pd.DataFrame, resume_text: str, k: int = TOP_K) -> pd.DataFrame:
+    """
+    Computes TF-IDF cosine similarity and adds an explanation column:
+    'matched_keywords' = overlap of top TF-IDF terms (resume vs job).
+    """
+    job_text = get_job_text(df)
+
     vectorizer = build_vectorizer()
     job_matrix = vectorizer.fit_transform(job_text)
     resume_vec = vectorizer.transform([resume_text])
+
     scores = cosine_similarity(resume_vec, job_matrix).flatten()
-    return pd.Series(scores, index=job_text.index, name="match_score")
-
-
-def top_matches(df: pd.DataFrame, resume_text: str, k: int = TOP_K) -> pd.DataFrame:
-    job_text = get_job_text(df)
-    scores = compute_similarity_scores(job_text, resume_text)
 
     out = df.copy()
     out["match_score"] = scores
 
-    return out.sort_values("match_score", ascending=False).head(k)
+    top_df = out.sort_values("match_score", ascending=False).head(k).copy()
+    top_indices = top_df.index.tolist()
+
+    # Terms for resume (once)
+    resume_terms = set(top_terms(vectorizer, resume_vec, n=RESUME_TERMS_N))
+
+    matched_keywords = []
+    # Map dataframe index -> row position inside job_text/job_matrix
+    index_to_pos = {idx: pos for pos, idx in enumerate(job_text.index)}
+
+    for idx in top_indices:
+        pos = index_to_pos.get(idx)
+        if pos is None:
+            matched_keywords.append("")
+            continue
+
+        job_vec = job_matrix[pos]
+        job_terms = set(top_terms(vectorizer, job_vec, n=JOB_TERMS_N))
+
+        overlap = sorted(resume_terms.intersection(job_terms))[:OVERLAP_N]
+        matched_keywords.append(", ".join(overlap))
+
+    top_df["matched_keywords"] = matched_keywords
+    return top_df
 
 
 # -----------------------
@@ -75,12 +117,12 @@ def main() -> None:
     df = load_jobs(JOBS_CSV)
     resume_text = load_resume(RESUME_PATH)
 
-    matches = top_matches(df, resume_text, k=TOP_K)
+    matches = explain_matches(df, resume_text, k=TOP_K)
 
     ensure_output_dir(OUTPUT_DIR)
     matches.to_csv(OUTPUT_CSV, index=False)
 
-    cols_to_show = ["Title", "Company", "Location", "match_score"]
+    cols_to_show = ["Title", "Company", "Location", "match_score", "matched_keywords"]
     existing_cols = [c for c in cols_to_show if c in matches.columns]
     print(matches[existing_cols].to_string(index=False))
 
