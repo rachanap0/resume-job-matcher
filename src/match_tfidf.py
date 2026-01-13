@@ -100,10 +100,35 @@ def run_tfidf_match(
     top_df["matched_keywords"] = matched_keywords
     top_df["missing_keywords"] = missing_keywords
 
-    ensure_output_dir(os.path.dirname(out_csv) or ".")
-    top_df.to_csv(out_csv, index=False)
+def run_tfidf_match(
+    jobs_csv: str,
+    resume_path: str,
+    out_csv: str,
+    top_k: int = 10,
+    text_column: str = "Descriptions",
+    max_features: int = 50_000,
+) -> pd.DataFrame:
+    # update globals used by helpers (keeps changes minimal)
+    global TEXT_COLUMN, MAX_FEATURES
+    TEXT_COLUMN = text_column
+    MAX_FEATURES = max_features
 
-    return top_df
+    df = load_jobs(jobs_csv)
+    resume_text = load_resume(resume_path)
+
+    matches = explain_matches(df, resume_text, k=top_k)
+
+    ensure_output_dir(os.path.dirname(out_csv) or ".")
+    matches.to_csv(out_csv, index=False)
+    return matches
+# -----------------------
+# Entrypoint
+# -----------------------
+def main() -> None:
+    df = load_jobs(JOBS_CSV)
+    resume_text = load_resume(RESUME_PATH)
+
+    matches = explain_matches(df, resume_text, k=TOP_K)
 
 
 def main():
